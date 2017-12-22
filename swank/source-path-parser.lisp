@@ -56,20 +56,27 @@
     ;; currently exist in the image.)
     (ignore-errors (funcall orig-sharpdot-reader s c n))))
 
+(defstruct syntax-object-imitation
+  "Used instead of atomic form when recording source paths"
+  data)
+
 (defun make-source-recorder (fn source-map)
   "Return a macro character function that does the same as FN, but
 additionally stores the result together with the stream positions
 before and after of calling FN in the hashtable SOURCE-MAP."
   (lambda (stream char)
-    (let ((start (1- (file-position stream)))
-	  (values (multiple-value-list (funcall fn stream char)))
-	  (end (file-position stream)))
+    (let* ((start (1- (file-position stream)))
+           (values (multiple-value-list (funcall fn stream char)))
+           (object-read (car values))
+           (end (file-position stream)))
       #+(or)
       (format t "[~D \"~{~A~^, ~}\" ~D ~D ~S]~%"
 	      start values end (char-code char) char)
       (when values
+        (unless (sb-c::source-form-has-path-p object-read)
+          (setf object-read (make-syntax-object-imitation :data object-read)))
         (destructuring-bind (&optional existing-start &rest existing-end)
-            (car (gethash (car values) source-map))
+            (car (gethash object-read source-map))
           ;; Some macros may return what a sub-call to another macro
           ;; produced, e.g. "#+(and) (a)" may end up saving (a) twice,
           ;; once from #\# and once from #\(. If the saved form
@@ -77,8 +84,9 @@ before and after of calling FN in the hashtable SOURCE-MAP."
           (unless (and existing-start existing-end
                        (<= start existing-start end)
                        (<= start existing-end end))
-            (push (cons start end) (gethash (car values) source-map)))))
-      (values-list values))))
+            (push (cons start end) (gethash object-read source-map)))))
+      ;; substitue atoms with syntax-objects!!!
+      (values-list (cons object-read (cdr values))))))
 
 (defun make-source-recording-readtable (readtable source-map)
   (declare (type readtable readtable) (type hash-table source-map))
@@ -221,7 +229,10 @@ Return the form and the source-map."
   (:method ((sexp t) i) nil))
 
 (defgeneric sexp-ref (sexp i)
-  (:method ((s list) i) (elt s i)))
+  (:method ((s list) i)
+           #-ysbcl (elt s i)
+           #+ysbcl (if (eql i 0) (car s) (cdr s))
+           ))
 
 (defun source-path-source-position (path form source-map)
   "Return the start position of PATH from FORM and SOURCE-MAP.  All
