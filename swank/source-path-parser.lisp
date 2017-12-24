@@ -75,18 +75,32 @@ before and after of calling FN in the hashtable SOURCE-MAP."
       (when values
         (unless (sb-c::source-form-has-path-p object-read)
           (setf object-read (make-syntax-object-imitation :data object-read)))
-        (destructuring-bind (&optional existing-start &rest existing-end)
-            (car (gethash object-read source-map))
-          ;; Some macros may return what a sub-call to another macro
-          ;; produced, e.g. "#+(and) (a)" may end up saving (a) twice,
-          ;; once from #\# and once from #\(. If the saved form
-          ;; is a subform, don't save it again.
-          (unless (and existing-start existing-end
-                       (<= start existing-start end)
-                       (<= start existing-end end))
-            (push (cons start end) (gethash object-read source-map)))))
-      ;; substitue atoms with syntax-objects!!!
+        (do-record-source-for-object object-read source-map start end))
+      ;; substitute atoms with syntax-objects!!!
       (values-list (cons object-read (cdr values))))))
+
+;; notes that the object was read from given interval, may also extend 
+;; existing interval.
+(defun do-record-source-for-object (object-read source-map start end)
+  (destructuring-bind (&optional existing-start &rest existing-end)
+                      (car (gethash object-read source-map))
+    ;; Some macros may return what a sub-call to another macro
+    ;; produced, e.g. "#+(and) (a)" may end up saving (a) twice,
+    ;; once from #\# and once from #\(. If the saved form
+    ;; is a subform, don't save it again.
+    (cond
+     ((not existing-start)
+      (setf (gethash object-read source-map) (list (cons start end))))
+     ;; segments cross - take union
+     ((and (< (max start existing-start) (min end existing-end)))
+      (setf (gethash object-read source-map)
+            (list (cons
+                   (min start existing-start)
+                   (max end existing-end)))))
+     ;; segments don't cross - add a new segment
+     (t 
+      (push (cons start end) (gethash object-read source-map))))))
+  
 
 (defun make-source-recording-readtable (readtable source-map)
   (declare (type readtable readtable) (type hash-table source-map))
@@ -126,7 +140,32 @@ subexpressions of the object to stream positions."
     ;; ensure that at least FORM is in the source-map
     (unless (gethash form source-map)
       (push (cons start end) (gethash form source-map)))
+    (fill-in-source-map-for-cdrs form source-map nil (make-hash-table :test 'eq))
     (values form source-map)))
+
+
+(defun map-known-source-locations (function-of-beg-and-end form source-map)
+  (let ((places (gethash form source-map)))
+    (dolist (place places)
+      (destructuring-bind (&optional start &rest end)
+                          place
+      (funcall function-of-beg-and-end start end)))))
+
+;;; read-and-record-source-map won't record successive cdrs in 
+;;; (a b c) - fill them in from their cars
+(defun fill-in-source-map-for-cdrs (form source-map superform marked-table)
+  (unless (gethash form marked-table)
+    (setf (gethash form marked-table) t)
+    (when (consp form)
+      (fill-in-source-map-for-cdrs (car form) source-map form marked-table)
+      (fill-in-source-map-for-cdrs (cdr form) source-map form marked-table))
+    ;; if form is a subform of a superform, superform is wider.
+    (when superform
+      (map-known-source-locations
+       (lambda (start end)
+         (do-record-source-for-object superform source-map start end))
+       form
+       source-map))))
 
 (defun starts-with-p (string prefix)
   (declare (type string string prefix))
@@ -224,14 +263,13 @@ Return the form and the source-map."
 
 (defgeneric sexp-in-bounds-p (sexp i)
   (:method ((list list) i)
-    (< i (loop for e on list
-               count t)))
-  (:method ((sexp t) i) nil))
+           (or (eql i 0)
+               (and (cdr list) (eql i 1))))
+  (:method ((sexp t) i) t))
 
 (defgeneric sexp-ref (sexp i)
   (:method ((s list) i)
-           #-ysbcl (elt s i)
-           #+ysbcl (if (eql i 0) (car s) (cdr s))
+           (if (eql i 0) (car s) (cdr s))
            ))
 
 (defun source-path-source-position (path form source-map)
@@ -240,11 +278,23 @@ subforms along the path are considered and the start and end position
 of the deepest (i.e. smallest) possible form is returned."
   ;; compute all subforms along path
   (let ((forms (loop for i in path
-		     for f = form then (if (sexp-in-bounds-p f i)
-					   (sexp-ref f i))
-		     collect f)))
-    ;; select the first subform present in source-map
-    (loop for form in (nreverse forms)
-	  for ((start . end) . rest) = (gethash form source-map)
-	  when (and start end (not rest))
-	  return (return (values start end)))))
+                 for f = form then (if (sexp-in-bounds-p f i)
+                                       (sexp-ref f i))
+                 for super-form = nil then f
+                 ;; collect super-form when we pass from form to it's car
+                 collect (vector f (if (and (atom form) (eql i 0)) super-form)))))
+    ;;PRINT (format t "~&swank/source-path-parser::source-path-source-position : forms = ~S~%" forms)
+    ;; select the first subform which either
+    ;; i) present in source-map. 
+    ;; ii) super-form of which present in source-map
+    (loop for v in (nreverse forms)
+      for form = (elt v 0)
+      for super-form = (elt v 1)
+      for ((start . end) . rest) = (gethash form source-map)
+      for ((start-super . end-super) . rest-super)
+      = (and super-form (gethash super-form source-map))
+      when (and start end (not rest))
+      return (return (values start end))
+      when (and start-super end-super (not rest-super))
+      return (return (values start-super end-super))
+      )))
