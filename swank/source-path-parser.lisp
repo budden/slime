@@ -72,12 +72,15 @@ before and after of calling FN in the hashtable SOURCE-MAP."
       #+(or)
       (format t "[~D \"~{~A~^, ~}\" ~D ~D ~S]~%"
 	      start values end (char-code char) char)
-      (when values
+      (cond
+       (values
         (unless (sb-c::source-form-has-path-p object-read)
           (setf object-read (make-syntax-object-imitation :data object-read)))
-        (do-record-source-for-object object-read source-map start end))
-      ;; substitute atoms with syntax-objects!!!
-      (values-list (cons object-read (cdr values))))))
+        (do-record-source-for-object object-read source-map start end)
+        ;; substitute atoms with syntax-objects!!!
+        (values-list (cons object-read (cdr values))))
+       (t
+        (values))))))
 
 ;; notes that the object was read from given interval, may also extend 
 ;; existing interval.
