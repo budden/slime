@@ -885,7 +885,7 @@ if the file doesn't exist; otherwise the first line of the file."
          ,k))))
 
 (defun handle-requests (connection &optional timeout)
-  "Read and process :emacs-rex-rt requests.
+  "Read and process :emacs-rex and :emacs-rex-rt requests.
 The processing is done in the extent of the toplevel restart."
   (with-connection (connection)
     (cond (*sldb-quit-restart*
@@ -900,12 +900,15 @@ The processing is done in the extent of the toplevel restart."
   "Read and process requests from Emacs."
   (loop
    (multiple-value-bind (event timeout?)
-       (wait-for-event `(or (:emacs-rex-rt . _)
+       (wait-for-event `(or
+                            (:emacs-rex . _)
+                            (:emacs-rex-rt . _)
                             (:emacs-channel-send . _))
                        timeout)
     (when timeout? (return))
     (dcase event
-      ((:emacs-rex-rt &rest args) (apply #'eval-for-emacs args))
+      ((:emacs-rex &rest args) (apply #'eval-for-emacs args))
+      ((:emacs-rex-rt &rest args) (apply #'eval-for-emacs-rt args))
       ((:emacs-channel-send channel (selector &rest args))
        (channel-send channel selector args))))))
 
@@ -1002,8 +1005,14 @@ The processing is done in the extent of the toplevel restart."
   (spawn (lambda () 
            (with-bindings *default-worker-thread-bindings*
              (with-top-level-restart (connection nil)
-               (apply #'eval-for-emacs 
-                      (cdr (wait-for-event `(:emacs-rex-rt . _)))))))
+               (let ((event
+                      (wait-for-event `(or (:emacs-rex . _)
+                                           (:emacs-rex-rt . _)))))
+                 (dcase event
+                        ((:emacs-rex &rest args)
+                         (apply #'eval-for-emacs args))
+                        ((:emacs-rex-rt &rest args)
+                         (apply #'eval-for-emacs-rt args)))))))
          :name "worker"))
 
 (defun add-active-thread (connection thread)
@@ -1023,6 +1032,16 @@ The processing is done in the extent of the toplevel restart."
   "Handle an event triggered either by Emacs or within Lisp."
   (log-event "dispatch-event: ~s~%" event)
   (dcase event
+    ((:emacs-rex form package thread-id id)
+     (let ((thread (thread-for-evaluation connection thread-id)))
+       (cond (thread
+              (add-active-thread connection thread)
+              (send-event thread `(:emacs-rex ,form ,package ,id)))
+             (t
+              (encode-message 
+               (list :invalid-rpc id
+                     (format nil "Thread not found: ~s" thread-id))
+               (current-socket-io))))))
     ((:emacs-rex-rt form package readtable thread-id id)
      (let ((thread (thread-for-evaluation connection thread-id)))
        (cond (thread
@@ -1714,8 +1733,10 @@ Fall back to the current if no such package exists."
   (or (and string (guess-package string))
       *package*))
 
+(defun eval-for-emacs (form buffer-package id)
+  (eval-for-emacs-rt form buffer-package nil id))
 
-(defun eval-for-emacs (form buffer-package buffer-readtable id)
+(defun eval-for-emacs-rt (form buffer-package buffer-readtable id)
   "Bind *BUFFER-PACKAGE* to BUFFER-PACKAGE, *READTABLE* to buffer-readtable and evaluate FORM.
 Return the result to the continuation ID.
 Errors are trapped and invoke our debugger."
@@ -2142,8 +2163,10 @@ after Emacs causes a restart to be invoked."
            (handler-case 
                (dcase (wait-for-event 
                                   `(or (:emacs-rex-rt . _)
+                                       (:emacs-rex . _)
                                        (:sldb-return ,(1+ level))))
-                 ((:emacs-rex-rt &rest args) (apply #'eval-for-emacs args))
+                 ((:emacs-rex-rt &rest args) (apply #'eval-for-emacs-rt args))
+                 ((:emacs-rex &rest args) (apply #'eval-for-emacs args))
                  ((:sldb-return _) (declare (ignore _)) (return nil)))
              (sldb-condition (c) 
                (handle-sldb-condition c))))))

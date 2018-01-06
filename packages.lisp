@@ -180,6 +180,7 @@
            #:set-default-directory
            #:quit-lisp
            #:eval-for-emacs
+           #:eval-for-emacs-rt
            #:eval-in-emacs
            #:y-or-n-p-in-emacs
            #:*find-definitions-right-trim*
