@@ -856,10 +856,15 @@
 ;;; Weak datastructures
 
 (defimplementation make-weak-key-hash-table (&rest args)
-  (apply #'make-hash-table :weak :key args))
+  (when (getf args :test)
+    (assert (eq (getf args :test) 'eq)))
+  (apply #'make-hash-table :test 'eq :weak :key args))
 
 (defimplementation make-weak-value-hash-table (&rest args)
-  (apply #'make-hash-table :weak :value args))
+  (apply #'make-hash-table :weak :value args)
+  #+NIL (when (getf args :test)
+    (assert (eq (getf args :test) 'eq)))
+  #+NIL (apply #'make-hash-table :test 'eq :weak :value args))
 
 (defimplementation hash-table-weakness (hashtable)
   (ccl:hash-table-weak-p hashtable))

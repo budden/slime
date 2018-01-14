@@ -1060,7 +1060,7 @@ The processing is done in the extent of the toplevel restart."
     (((:write-string 
        :debug :debug-condition :debug-activate :debug-return :channel-send
        :presentation-start :presentation-end
-       :new-package :new-features :ed :indentation-update
+       :new-package :new-package-rt :new-features :ed :indentation-update
        :eval :eval-no-wait :background-message :inspect :ping
        :y-or-n-p :read-from-minibuffer :read-string :read-aborted :test-delay
        :write-image)
@@ -1697,19 +1697,23 @@ Return nil if no package matches."
 
 (defun guess-readtable-rt (string)
   "Guess which readtable corresponds to STRING.
-Return nil if no readtable matches."
-  (when string
-    (cond
-      (find-readtable-fn
-       (or
-        (funcall find-readtable-fn (intern string :keyword))
-        (funcall find-readtable-fn nil)))
-      ((find-package :editor-hints.named-readtables)
-       (setf find-readtable-fn
-             (find-symbol "FIND-READTABLE" :editor-hints.named-readtables))
-       (guess-readtable-rt string))
-      (t
-       *readtable*))))
+   Return nil if no readtable matches."
+  (let ((readtable-name-symbol
+         (with-standard-io-syntax
+          (let ((*read-eval* nil))
+            (read-from-string string)))))
+    (when string
+      (cond
+       (find-readtable-fn
+        (or
+         (funcall find-readtable-fn readtable-name-symbol)
+         (funcall find-readtable-fn nil)))
+       ((find-package :editor-hints.named-readtables)
+        (setf find-readtable-fn
+              (find-symbol "FIND-READTABLE" :editor-hints.named-readtables))
+        (guess-readtable-rt string))
+       (t
+        *readtable*)))))
 
 
 (defun guess-buffer-readtable-rt (package-string readtable-string)
