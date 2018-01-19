@@ -869,4 +869,73 @@
 (defimplementation hash-table-weakness (hashtable)
   (ccl:hash-table-weak-p hashtable))
 
+
+;;;;;;;;;;;;;;;;;;;
+;;;; The following code is (C) Denis Budyak 2018, expat license
+;;;;;;;;;;;;;;;;;;;
+(defun loud-message (format &rest args)
+  "Show message in a way that it can't be passed unattended"
+  (cond
+   ((find-package :oduvanchik)
+    (apply (find-symbol "LOUD-MESSAGE") format args))
+   (t
+    (apply 'warn format args))))
+
+(defimplementation activate-stepping (frame)
+  "Returns 0 if stepping is inactive and we failed to activate it~
+ ~%         1 is stepping was active~
+ ~%         2 if we activated stepping"
+  (declare (ignore frame))
+  (cond
+   ((find-package :NATIVE-CODE-STEPPER)
+    (let ((stepping-enabled-sym
+           (find-symbol "*STEPPING-ENABLED*" :native-code-stepper)))
+      (cond
+       ((symbol-value stepping-enabled-sym) ; stepping already activated
+        ; nothing to do
+        1
+        )
+       (t
+        ; activate stepping and do the first step
+        (setf (symbol-value stepping-enabled-sym) t)
+        2
+        ))))
+   (t
+    (loud-message "Unable to activate stepping - no :NATIVE-CODE-STEPPER")
+    0)))
+
+(defimplementation sldb-stepper-condition-p (condition)
+  ;; true for breaks (if called from the debugger). FIXME better filtering
+  (and 
+   (typep condition 'simple-condition)
+   (find-restart 'continue)))
+
+(defimplementation sldb-step-into ()
+  (let ((stepping-status
+         ;; FIXME do we need frame here? 
+         (activate-stepping 77534)))
+    (case stepping-status
+      (0
+       ; we failed, do nothing
+       )
+      (1
+       (cond
+        ((find-restart 'step-into)
+         (invoke-restart 'step-into))
+        ((find-restart 'continue)
+         (invoke-restart 'continue))
+        (t
+         (loud-message "Neither STEP-INTO nor CONTINUE restart. Don't know how to step. Please activate further program execution manually (e.g. by choosing some restart)"))))
+      (2 ; we just activated stepping, try to do first step
+       (cond
+        ((find-restart 'continue)
+         (invoke-restart 'continue))
+        (t
+         (loud-message "No continue restart - unable to do the first step. Please invoke an appropriate restart by hand")))))))
+
+;;;;;;;;;;;;;;;;;;;
+;;;; End of code (C) Denis Budyak 2018, expat license
+;;;;;;;;;;;;;;;;;;;
+
+
 (pushnew 'deinit-log-output ccl:*save-exit-functions*)
