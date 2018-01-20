@@ -877,7 +877,8 @@
   "Show message in a way that it can't be passed unattended"
   (cond
    ((find-package :oduvanchik)
-    (apply (find-symbol "LOUD-MESSAGE") format args))
+    (apply (find-symbol "LOUD-MESSAGE" :oduvanchik)
+           format args))
    (t
     (apply 'warn format args))))
 
@@ -912,25 +913,29 @@
    (find-restart 'continue)))
 
 (defimplementation sldb-step-into ()
-  (let ((stepping-status
-         ;; FIXME do we need frame here? 
-         (activate-stepping 77534)))
-    (case stepping-status
-      (0
-       ; we failed, do nothing
-       )
-      (1
-       (cond
-        ((find-restart 'step-into)
-         (invoke-restart 'step-into))
-        ((find-restart 'continue)
-         (invoke-restart 'continue))
-        (t
-         (loud-message "Neither STEP-INTO nor CONTINUE restart. Don't know how to step. Please activate further program execution manually (e.g. by choosing some restart)"))))
-      (2 ; we just activated stepping, step is done while activating, so
-         ; we should not even get there
-       ))))
-
+  (let* ((target-restart
+          (or
+           (find-restart 'cl-user::step-into)
+           (find-restart 'continue))))
+    (cond
+     ((null target-restart)
+      (loud-message "Neither STEP-INTO nor CONTINUE restart. Don't know how to step. Please activate further program execution manually (e.g. by choosing some restart)"))      
+     ((eq (restart-name target-restart) 'cl-user::step-into)
+      ;; stepping already, just do the step
+      (invoke-restart target-restart))
+     ((eq (restart-name target-restart) 'continue)
+      (let ((stepping-status (activate-stepping 32432432)))
+        (ecase stepping-status
+          (0 ; activate-stepping reported error already, so
+           ;; do nothing
+           )
+          (1 ; we're likely in BREAK or CERROR, so we have no step-into.
+           ;; Invoke what we can
+           (invoke-restart target-restart))
+          ;; 2 should not happen because activate-stepping would invoke-restart
+          )))
+     (t
+      (error "Error in stepper implementation")))))
 
 ;;;;;;;;;;;;;;;;;;;
 ;;;; End of code (C) Denis Budyak 2018, expat license
