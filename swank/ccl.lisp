@@ -885,7 +885,7 @@
   "Returns 0 if stepping is inactive and we failed to activate it~
  ~%         1 is stepping was active~
  ~%         2 if we activated stepping"
-  (declare (ignore frame))
+  (declare (ignorable frame))
   (cond
    ((find-package :NATIVE-CODE-STEPPER)
     (let ((stepping-enabled-sym
@@ -897,9 +897,10 @@
         )
        (t
         ; activate stepping and do the first step
-        (setf (symbol-value stepping-enabled-sym) t)
-        2
-        ))))
+        (funcall (find-symbol "ACTIVATE-STEPPING-AND-DO-FIRST-STEP"
+                              :native-code-stepper)
+                 frame)
+        2))))
    (t
     (loud-message "Unable to activate stepping - no :NATIVE-CODE-STEPPER")
     0)))
@@ -926,12 +927,10 @@
          (invoke-restart 'continue))
         (t
          (loud-message "Neither STEP-INTO nor CONTINUE restart. Don't know how to step. Please activate further program execution manually (e.g. by choosing some restart)"))))
-      (2 ; we just activated stepping, try to do first step
-       (cond
-        ((find-restart 'continue)
-         (invoke-restart 'continue))
-        (t
-         (loud-message "No continue restart - unable to do the first step. Please invoke an appropriate restart by hand")))))))
+      (2 ; we just activated stepping, step is done while activating, so
+         ; we should not even get there
+       ))))
+
 
 ;;;;;;;;;;;;;;;;;;;
 ;;;; End of code (C) Denis Budyak 2018, expat license
